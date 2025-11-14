@@ -3,65 +3,39 @@ package main
 import (
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-var bucket = make(map[string][]string)
+var windowToCounterMap = make(map[string]int)
 
-func getIp(str string) string {
-	ip := str
-	if strings.Contains(str, ":") {
-		ip = strings.Split(ip, ":")[0]
-	}
-
-	return ip
-}
+const counterThreshold = 60
 
 func RateLimiter(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println(r.RemoteAddr)
-		ipAddress := getIp(r.RemoteAddr)
 
-		w.Header().Set("x-ip-address", ipAddress)
+		fmt.Println(windowToCounterMap)
+		currentTime := time.Now()
+		currentWindow := fmt.Sprintf("%02d.%02d", currentTime.Hour(), currentTime.Minute())
 
-		fmt.Println(bucket)
-
-		// if the ipAddress doesn't key exists in the bucket, create it
-		_, exists := bucket[ipAddress]
+		_, exists := windowToCounterMap[currentWindow]
 
 		if !exists {
-			bucket[ipAddress] = []string{"x", "x", "x", "x", "x", "x", "x", "x", "x", "x"}
-
-			ticker := time.NewTicker(time.Second)
-
-			// goroutine to add to the ip address bucket and check if the bucket is full
-			go func() {
-				for {
-					t := <-ticker.C
-					fmt.Printf("Tick at: %s for %s \n", t, ipAddress)
-					if len(bucket[ipAddress]) == 10 {
-						fmt.Printf("%s Bucket is full: %s \n", ipAddress, bucket[ipAddress])
-					} else {
-						bucket[ipAddress] = append(bucket[ipAddress], "x")
-						fmt.Print(bucket)
-					}
-				}
-			}()
+			windowToCounterMap[currentWindow] = 0
 		}
 
-		if len(bucket[ipAddress]) == 0 {
+		// counter >= threshold, discard request
+		if windowToCounterMap[currentWindow] >= counterThreshold {
+			fmt.Printf("See window counter: %v\n", windowToCounterMap)
 			http.Error(w, "Too many request", http.StatusTooManyRequests)
 			return
 		}
 
-		// Remove one token from the IP's bucket and serve the request
-		bucket[ipAddress] = bucket[ipAddress][:len(bucket[ipAddress])-1]
+		// increment the window counter
+		windowToCounterMap[currentWindow] += 1
 
-		fmt.Printf("Popped one. Remaining %s", bucket[ipAddress])
 		next.ServeHTTP(w, r)
 	})
 }
