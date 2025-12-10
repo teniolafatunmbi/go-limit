@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -11,6 +12,7 @@ import (
 
 func main() {
 	r := chi.NewRouter()
+	PORT := 8080
 
 	r.Use(middleware.Logger)
 	r.Use(pkg.RateLimiter)
@@ -23,5 +25,6 @@ func main() {
 		w.Write([]byte("Limited, don't over use me!"))
 	})
 
-	http.ListenAndServe("localhost:8080", r)
+	fmt.Printf("Server started at port: %d", PORT)
+	http.ListenAndServe(fmt.Sprintf("localhost:%d", PORT), r)
 }

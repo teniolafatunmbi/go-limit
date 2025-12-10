@@ -2,8 +2,8 @@ package pkg
 
 import (
 	"fmt"
+	"net"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -14,13 +14,14 @@ var bucket []time.Time
 const WINDOW = 60 * time.Second
 const THRESHOLD = 60
 
-func getIp(str string) string {
-	ip := str
-	if strings.Contains(str, ":") {
-		ip = strings.Split(ip, ":")[0]
+func getIpFromRemoteAddr(remoteAddr string) (*string, error) {
+	ip, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		fmt.Println(err.Error())
+		return nil, err
 	}
 
-	return ip
+	return &ip, nil
 }
 
 func getTotalRequestsInCurrentWindow(bucket []time.Time, window time.Duration) int {
@@ -40,8 +41,13 @@ func getTotalRequestsInCurrentWindow(bucket []time.Time, window time.Duration) i
 func RateLimiter(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(r.RemoteAddr)
-		ipAddress := getIp(r.RemoteAddr)
-		w.Header().Set("x-ip-address", ipAddress)
+		ipAddress, err := getIpFromRemoteAddr(r.RemoteAddr)
+		if err != nil {
+			http.Error(w, "Malformed request", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("x-ip-address", *ipAddress)
 
 		requestTimestamp := time.Now()
 
