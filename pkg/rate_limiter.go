@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// maybe use a go func that runs in 1 minute intervals to clear logs that fall out of the
+// maybe use a goroutine that runs in 1 minute intervals to clear logs that fall out of the
 // set sliding `window` interval
 var bucket []time.Time
 
