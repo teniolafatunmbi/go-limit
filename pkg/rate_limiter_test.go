@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -41,26 +42,62 @@ func TestGetIpFromRemoteAddr(t *testing.T) {
 			require.Equal(t, tc.expected, *ipAddress)
 		})
 	}
-
 }
 
-func TestGetTotalRequestsInCurrentWindow(t *testing.T) {
-	var timestamps []time.Time
-	currentTime := time.Now()
-	const REQUESTS_IN_LAST_WINDOW_COUNT = 15
+func TestInitializeNewWindows(t *testing.T) {
+	windowMap := make(WindowMap)
 
-	// 10 timestamps for two minutes in the last 3 minutes.
-	for i := 10; i < 20; i++ {
-		timestamps = append(timestamps, currentTime.Add(time.Duration(-i*12)*time.Second))
-	}
+	windowMap.InitializeNewWindows()
 
-	// 15 timestamps for the last one minute
-	for i := range REQUESTS_IN_LAST_WINDOW_COUNT {
-		timestamps = append(timestamps, currentTime.Add(time.Duration(-i*4)*time.Second))
-	}
+	assert.Contains(t, windowMap, CurrentWindowKey)
+	assert.Contains(t, windowMap, PreviousWindowKey)
+	assert.IsType(t, &WindowValue{}, windowMap[CurrentWindowKey])
+	assert.IsType(t, &WindowValue{}, windowMap[PreviousWindowKey])
+}
 
-	totalRequestsInCurrentWindow := getTotalRequestsInCurrentWindow(timestamps, WINDOW)
+func TestAdvanceWindow(t *testing.T) {
+	// initialize window
+	windowMap := make(WindowMap)
 
-	assert.Equal(t, REQUESTS_IN_LAST_WINDOW_COUNT, totalRequestsInCurrentWindow)
+	windowMap.InitializeNewWindows()
 
+	now := time.Now()
+
+	lastMinuteWindow := fmt.Sprintf("%2d.%2d", now.Hour(), now.Minute()-1)
+	currentWindow := fmt.Sprintf("%2d.%2d", now.Hour(), now.Minute())
+
+	windowMap[CurrentWindowKey].key = lastMinuteWindow
+
+	windowMap.AdvanceWindow(currentWindow)
+
+	assert.Equal(t, currentWindow, windowMap[CurrentWindowKey].key)
+	assert.Equal(t, lastMinuteWindow, windowMap[PreviousWindowKey].key)
+}
+
+func TestCalculateNumberOfRequestsInCurrentWindow_WindowRequestIsAlwaysLessThanThreshold(t *testing.T) {
+	windowMap := make(WindowMap)
+
+	windowMap.InitializeNewWindows()
+
+	now := time.Now()
+	lastMinuteWindow := fmt.Sprintf("%2d.%2d", now.Hour(), now.Minute()-1)
+	currentWindow := fmt.Sprintf("%2d.%2d", now.Hour(), now.Minute())
+
+	//  populate previous window with the max number of requests
+	windowMap[PreviousWindowKey].key = lastMinuteWindow
+	windowMap[PreviousWindowKey].count = THRESHOLD
+
+	//  add 10 requests to the current window
+	windowMap[CurrentWindowKey].key = currentWindow
+	windowMap[CurrentWindowKey].count = 10
+
+	// add 30 seconds to the current timestamp to simulate passing time in the current window
+	now = now.Add(30 * time.Second)
+
+	noOfRequestsInCurrentWindow := windowMap.CalculateNumberOfRequestsInCurrentWindow(now)
+
+	t.Logf("noOfRequestsInCurrentWindow: %d\n", noOfRequestsInCurrentWindow)
+
+	// assert that the number of requests in current window is less than the threshold
+	assert.Less(t, noOfRequestsInCurrentWindow, THRESHOLD)
 }
