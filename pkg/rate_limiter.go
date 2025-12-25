@@ -36,7 +36,7 @@ func getIpFromRemoteAddr(remoteAddr string) (*string, error) {
 	return &ip, nil
 }
 
-func calculateNumberOfRequestsInCurrentWindow(now time.Time, windowMap map[WindowKey]*WindowValue) int {
+func (windowMap *WindowMap) CalculateNumberOfRequestsInCurrentWindow(now time.Time) int {
 
 	startOfMinute := time.Date(
 		now.Year(), now.Month(), now.Day(),
@@ -49,17 +49,17 @@ func calculateNumberOfRequestsInCurrentWindow(now time.Time, windowMap map[Windo
 	overlapWeight := float64(WINDOW_IN_SECONDS-secondsIntoTheCurrentWindow) / float64(WINDOW_IN_SECONDS)
 
 	// calculate the number of requests in this window
-	numberOfRequestsInCurrentWindow := windowMap[CurrentWindowKey].count + (windowMap[PreviousWindowKey].count * int(math.Round(overlapWeight)))
+	numberOfRequestsInCurrentWindow := (*windowMap)[CurrentWindowKey].count + ((*windowMap)[PreviousWindowKey].count * int(math.Round(overlapWeight)))
 
 	return numberOfRequestsInCurrentWindow
 }
 
-func advanceWindow(currentWindow string, windowMap *WindowMap) {
+func (windowMap *WindowMap) AdvanceWindow(currentWindow string) {
 	(*windowMap)[PreviousWindowKey] = (*windowMap)[CurrentWindowKey]
 	(*windowMap)[CurrentWindowKey] = &WindowValue{key: currentWindow, count: 0}
 }
 
-func initializeNewWindows(windowMap *WindowMap) {
+func (windowMap *WindowMap) InitializeNewWindows() {
 	(*windowMap)[CurrentWindowKey] = &WindowValue{}
 	(*windowMap)[PreviousWindowKey] = &WindowValue{}
 }
@@ -81,16 +81,16 @@ func RateLimiter(next http.Handler) http.Handler {
 		_, previousWindowKeyExistsInMap := windowMap[PreviousWindowKey]
 
 		if (currentWindowKeyExistsInMap && previousWindowKeyExistsInMap) == false {
-			initializeNewWindows(&windowMap)
+			windowMap.InitializeNewWindows()
 		}
 
 		// if currentWindow is not the windowMap.current.key,
 		// we're in a new window, so update the current and previous windows
 		if currentWindow != windowMap[CurrentWindowKey].key {
-			advanceWindow(currentWindow, &windowMap)
+			windowMap.AdvanceWindow(currentWindow)
 		}
 
-		numberOfRequestsInCurrentWindow := calculateNumberOfRequestsInCurrentWindow(now, windowMap)
+		numberOfRequestsInCurrentWindow := windowMap.CalculateNumberOfRequestsInCurrentWindow(now)
 
 		fmt.Println("noOfRequestsInCurrentWindow.Sliding", numberOfRequestsInCurrentWindow)
 
