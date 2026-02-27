@@ -1,17 +1,21 @@
 package pkg
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"net"
 	"net/http"
+	"teniolafatunmbi/go-limit/pkg/cache"
 	"time"
 )
 
 type WindowKey string
 type WindowValue struct {
-	key   string
-	count int
+	Key   string `json:"key"`
+	Count int    `json:"count"`
 }
 type WindowMap map[WindowKey]*WindowValue
 
@@ -36,8 +40,11 @@ func getIpFromRemoteAddr(remoteAddr string) (*string, error) {
 	return &ip, nil
 }
 
-func (windowMap *WindowMap) CalculateNumberOfRequestsInCurrentWindow(now time.Time) int {
-
+func (windowMap *WindowMap) CalculateNumberOfRequestsInCurrentWindow(
+	ctx context.Context,
+	cache *cache.Cache,
+	now time.Time) (*int, error) {
+	// read the current and previous window key values from redis
 	startOfMinute := time.Date(
 		now.Year(), now.Month(), now.Day(),
 		now.Hour(), now.Minute(), 0, 0, now.Location(),
@@ -49,67 +56,184 @@ func (windowMap *WindowMap) CalculateNumberOfRequestsInCurrentWindow(now time.Ti
 	overlapWeight := float64(WINDOW_IN_SECONDS-secondsIntoTheCurrentWindow) / float64(WINDOW_IN_SECONDS)
 
 	// calculate the number of requests in this window
-	numberOfRequestsInCurrentWindow := (*windowMap)[CurrentWindowKey].count + ((*windowMap)[PreviousWindowKey].count * int(math.Round(overlapWeight)))
+	var numberOfRequestsInCurrentWindow int
 
-	return numberOfRequestsInCurrentWindow
+	// get current window value
+	currentWindowInRedis, err := cache.GetCurrentWindow(ctx)
+	previousWindowInRedis, err := cache.GetPreviousWindow(ctx)
+
+	var currentWindowInRedisJson WindowValue
+	var previousWindowInRedisJson WindowValue
+
+	json.Unmarshal([]byte(currentWindowInRedis), &currentWindowInRedisJson)
+	json.Unmarshal([]byte(previousWindowInRedis), &previousWindowInRedisJson)
+
+	if err != nil {
+		return &numberOfRequestsInCurrentWindow, err
+	}
+
+	// currentWindowCountToInt, err := strconv.Atoi(previousWindowInRedis)
+
+	// if err != nil {
+	// 	return &numberOfRequestsInCurrentWindow, err
+	// }
+
+	// previousWindowCountToInt, err := strconv.Atoi(previousWindowCount)
+
+	// if err != nil {
+	// 	return &numberOfRequestsInCurrentWindow, err
+	// }
+
+	numberOfRequestsInCurrentWindow = currentWindowInRedisJson.Count + (previousWindowInRedisJson.Count * int(math.Round(overlapWeight)))
+
+	return &numberOfRequestsInCurrentWindow, nil
 }
 
-func (windowMap *WindowMap) AdvanceWindow(currentWindow string) {
-	(*windowMap)[PreviousWindowKey] = (*windowMap)[CurrentWindowKey]
-	(*windowMap)[CurrentWindowKey] = &WindowValue{key: currentWindow, count: 0}
+func (windowMap *WindowMap) AdvanceWindow(ctx context.Context, cache *cache.Cache, currentWindow string) error {
+	currentWindowInRedis, err := cache.GetCurrentWindow(ctx)
+
+	if err != nil {
+		return err
+	}
+
+	// set the previous window key in redis to the current window value
+	err = cache.SetPreviousWindow(ctx, currentWindowInRedis)
+
+	if err != nil {
+		return err
+	}
+
+	newCurrentWindowValue, err := json.Marshal(WindowValue{Key: currentWindow, Count: 0})
+
+	if err != nil {
+		return err
+	}
+
+	err = cache.SetCurrentWindow(ctx, newCurrentWindowValue)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func (windowMap *WindowMap) InitializeNewWindows() {
-	(*windowMap)[CurrentWindowKey] = &WindowValue{}
-	(*windowMap)[PreviousWindowKey] = &WindowValue{}
+func (windowMap *WindowMap) InitializeCurrentAndPreviousWindows(
+	ctx context.Context,
+	cache *cache.Cache,
+	currentWindowKey string,
+) error {
+	currentWindowValue, _ := json.Marshal(WindowValue{Key: currentWindowKey, Count: 0})
+	defaultWindowValue, _ := json.Marshal(WindowValue{})
+
+	err := cache.SetCurrentWindow(ctx, currentWindowValue)
+	if err != nil {
+		return err
+	}
+
+	err = cache.SetPreviousWindow(ctx, defaultWindowValue)
+
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-func RateLimiter(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println(r.RemoteAddr)
-		ipAddress, err := getIpFromRemoteAddr(r.RemoteAddr)
-		if err != nil {
-			http.Error(w, "Malformed request", http.StatusBadRequest)
-			return
-		}
+// setup a logger for the rate limiter so it can log with request ID
+func RateLimiter(cache *cache.Cache) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ipAddress, err := getIpFromRemoteAddr(r.RemoteAddr)
+			if err != nil {
+				http.Error(w, "Malformed request", http.StatusBadRequest)
+				return
+			}
 
-		now := time.Now()
-		currentWindow := fmt.Sprintf("%2d.%2d", now.Hour(), now.Minute())
+			ctx := context.Background()
 
-		// if the map is empty, add the current window and previous window values
-		_, currentWindowKeyExistsInMap := windowMap[CurrentWindowKey]
-		_, previousWindowKeyExistsInMap := windowMap[PreviousWindowKey]
+			now := time.Now()
+			currentWindow := fmt.Sprintf("%02d:%02d", now.Hour(), now.Minute())
+			fmt.Println(currentWindow, "got here")
 
-		if (currentWindowKeyExistsInMap && previousWindowKeyExistsInMap) == false {
-			windowMap.InitializeNewWindows()
-		}
+			// if the map is empty, add the current window and previous window values
+			currWindowExists, _ := cache.DoesCurrentWindowExist(ctx)
+			prevWindowExists, _ := cache.DoesPreviousWindowExist(ctx)
 
-		// if currentWindow is not the windowMap.current.key,
-		// we're in a new window, so update the current and previous windows
-		if currentWindow != windowMap[CurrentWindowKey].key {
-			windowMap.AdvanceWindow(currentWindow)
-		}
+			if *currWindowExists == 0 && *prevWindowExists == 0 {
+				fmt.Println("no curr and prev windows. Initializing new windows...")
+				// set current window to `currentWindow`
+				err = windowMap.InitializeCurrentAndPreviousWindows(ctx, cache, currentWindow)
 
-		numberOfRequestsInCurrentWindow := windowMap.CalculateNumberOfRequestsInCurrentWindow(now)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("Internal server error: %s", err.Error()), http.StatusInternalServerError)
+					return
+				}
+			}
 
-		fmt.Println("noOfRequestsInCurrentWindow.Sliding", numberOfRequestsInCurrentWindow)
+			currentWindowInRedis, currWindowErr := cache.GetCurrentWindow(ctx)
 
-		// if noOfRequestsInCurrentWindow == Zero, discard request, else handle
-		if numberOfRequestsInCurrentWindow == THRESHOLD {
-			http.Error(w, "Too many request", http.StatusTooManyRequests)
-			return
-		}
+			if currWindowErr != nil {
+				http.Error(w, fmt.Sprintf("Internal server error: %s", err.Error()), http.StatusInternalServerError)
+				return
+			}
 
-		windowMap[CurrentWindowKey].count++
+			var currentWindowJsonInRedis WindowValue
+			err = json.Unmarshal([]byte(currentWindowInRedis), &currentWindowJsonInRedis)
 
-		fmt.Print("current.window.inferred ", currentWindow, "\n")
-		fmt.Print("current.window.map ", *windowMap[CurrentWindowKey], "\n")
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Internal server error: %s", err.Error()), http.StatusInternalServerError)
+				return
+			}
 
-		fmt.Print(*windowMap[CurrentWindowKey], *windowMap[PreviousWindowKey], "\n")
+			fmt.Println(currentWindowJsonInRedis, "curr window val in redis")
 
-		w.Header().Set("x-ip-address", *ipAddress)
-		w.Header().Set("x-rate-limit-remaining", fmt.Sprintf("%d", THRESHOLD-numberOfRequestsInCurrentWindow))
+			// if currentWindow is not the windowMap.current.key,
+			// we're in a new window, so update the current and previous windows
+			if currentWindow != currentWindowJsonInRedis.Key {
+				fmt.Println("current window doesn't match the current window key-value in store. Advancing window...")
 
-		next.ServeHTTP(w, r)
-	})
+				err = windowMap.AdvanceWindow(ctx, cache, currentWindow)
+
+				if err != nil {
+					http.Error(w, fmt.Sprintf("Internal server error: %s", err.Error()), http.StatusInternalServerError)
+					return
+				}
+			}
+
+			numberOfRequestsInCurrentWindow, err := windowMap.CalculateNumberOfRequestsInCurrentWindow(ctx, cache, now)
+
+			fmt.Println("noOfRequestsInCurrentWindow.Sliding", *numberOfRequestsInCurrentWindow)
+
+			// if noOfRequestsInCurrentWindow == threshold, discard request, else handle
+			if (*numberOfRequestsInCurrentWindow) >= THRESHOLD {
+				http.Error(w, "Too many request", http.StatusTooManyRequests)
+				return
+			}
+
+			currWindowInRedis, err := cache.GetCurrentWindow(ctx)
+
+			var currWindowInRedisJson WindowValue
+
+			json.Unmarshal([]byte(currWindowInRedis), &currWindowInRedisJson)
+
+			currWindowInRedisJson.Count++
+
+			marshalledCurrWindow, err := json.Marshal(currWindowInRedisJson)
+
+			err = cache.SetCurrentWindow(ctx, marshalledCurrWindow)
+
+			if err != nil {
+				log.Fatalf("Internal server error", err)
+				return
+			}
+
+			fmt.Print("current_window", currWindowInRedisJson, "\n")
+
+			w.Header().Set("x-ip-address", *ipAddress)
+			w.Header().Set("x-rate-limit-remaining", fmt.Sprintf("%d", THRESHOLD-(*numberOfRequestsInCurrentWindow)))
+
+			next.ServeHTTP(w, r)
+		})
+
+	}
 }

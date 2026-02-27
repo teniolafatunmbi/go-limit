@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -44,10 +45,11 @@ func TestGetIpFromRemoteAddr(t *testing.T) {
 	}
 }
 
-func TestInitializeNewWindows(t *testing.T) {
+func TestInitializeCurrentAndPreviousWindows(t *testing.T) {
 	windowMap := make(WindowMap)
+	ctx := context.Context()
 
-	windowMap.InitializeNewWindows()
+	windowMap.InitializeCurrentAndPreviousWindows(ctx)
 
 	assert.Contains(t, windowMap, CurrentWindowKey)
 	assert.Contains(t, windowMap, PreviousWindowKey)

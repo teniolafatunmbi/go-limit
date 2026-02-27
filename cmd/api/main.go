@@ -9,24 +9,32 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"teniolafatunmbi/go-limit/internal/redis"
 	"teniolafatunmbi/go-limit/pkg"
+	"teniolafatunmbi/go-limit/pkg/cache"
 )
 
 func main() {
 	r := chi.NewRouter()
 	PORT := ":8080"
 
+	// redis configuration
+	rdb := redis.NewRedisClient()
+	cache := cache.New(rdb)
+	rateLimiter := pkg.RateLimiter(cache)
+
 	r.Use(middleware.Logger)
-	r.Use(pkg.RateLimiter)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.RequestID)
 
 	r.Get("/unlimited", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Unlimited! Let's Go!"))
 	})
 
-	r.Get("/limited", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Limited, don't over use me!"))
+	r.Route("/limited", func(limited chi.Router) {
+		limited.Use(rateLimiter)
+		limited.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("Limited, don't over use me!"))
+		})
 	})
 
 	fmt.Printf("Server starting on port %s\n", PORT)
