@@ -25,6 +25,7 @@ func main() {
 
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(middleware.RequestID)
 
 	r.Get("/unlimited", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Unlimited! Let's Go!"))

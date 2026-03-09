@@ -47,7 +47,7 @@ func TestGetIpFromRemoteAddr(t *testing.T) {
 
 func TestInitializeCurrentAndPreviousWindows(t *testing.T) {
 	windowMap := make(WindowMap)
-	ctx := context.Context()
+	ctx := context.Background()
 
 	windowMap.InitializeCurrentAndPreviousWindows(ctx)
 

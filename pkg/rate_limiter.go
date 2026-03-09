@@ -153,7 +153,6 @@ func RateLimiter(cache *cache.Cache) func(http.Handler) http.Handler {
 
 			now := time.Now()
 			currentWindow := fmt.Sprintf("%02d:%02d", now.Hour(), now.Minute())
-			fmt.Println(currentWindow, "got here")
 
 			// if the map is empty, add the current window and previous window values
 			currWindowExists, _ := cache.DoesCurrentWindowExist(ctx)
@@ -161,7 +160,6 @@ func RateLimiter(cache *cache.Cache) func(http.Handler) http.Handler {
 
 			if *currWindowExists == 0 && *prevWindowExists == 0 {
 				fmt.Println("no curr and prev windows. Initializing new windows...")
-				// set current window to `currentWindow`
 				err = windowMap.InitializeCurrentAndPreviousWindows(ctx, cache, currentWindow)
 
 				if err != nil {
