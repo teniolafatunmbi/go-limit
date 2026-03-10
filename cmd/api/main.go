@@ -11,7 +11,6 @@ import (
 
 	"teniolafatunmbi/go-limit/internal/redis"
 	"teniolafatunmbi/go-limit/pkg"
-	"teniolafatunmbi/go-limit/pkg/cache"
 )
 
 func main() {
@@ -20,8 +19,15 @@ func main() {
 
 	// redis configuration
 	rdb := redis.NewRedisClient()
-	cache := cache.New(rdb)
-	rateLimiter := pkg.RateLimiter(cache)
+	rateLimiterCfg := pkg.RateLimiterConfig{
+		RedisClient: rdb,
+		Strategy: pkg.RateLimiterStrategy{
+			Name:            "sliding_window",
+			WindowInSeconds: 60,
+			Threshold:       40,
+		},
+	}
+	rateLimiter := pkg.RateLimiter(rateLimiterCfg)
 
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
