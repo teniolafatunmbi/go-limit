@@ -125,7 +125,7 @@ func initializeCurrentAndPreviousWindows(
 func SlidingWindowCounter(cache *cache.Cache, base *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestId := middleware.GetReqID(r.Context())
-		logger := base.With(slog.String("request_id", requestId))
+		logger := base.With(slog.String("request_id", requestId), slog.String("algorithm", "sliding_window_counter"))
 		ctx := logging.WithContext(r.Context(), logger)
 
 		ipAddress, err := utils.GetIpFromRemoteAddr(r.RemoteAddr)
