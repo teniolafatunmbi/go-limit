@@ -3,7 +3,7 @@ package handlers
 import (
 	"log/slog"
 	"net/http"
-	"teniolafatunmbi/go-limit/pkg/cache"
+	"teniolafatunmbi/go-limit/internal/cache"
 )
 
 func TokenBucket(cache *cache.Cache, logger *slog.Logger, next http.Handler) http.Handler {

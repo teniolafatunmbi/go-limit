@@ -1,11 +1,12 @@
 package pkg
 
 import (
+	"log/slog"
 	"net/http"
 	"sync"
-	"teniolafatunmbi/go-limit/pkg/cache"
-	"teniolafatunmbi/go-limit/pkg/handlers"
-	"teniolafatunmbi/go-limit/pkg/logging"
+	"teniolafatunmbi/go-limit/internal/cache"
+	"teniolafatunmbi/go-limit/internal/handlers"
+	"teniolafatunmbi/go-limit/internal/logging"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -26,8 +27,8 @@ var cacheInstanceLock = &sync.Mutex{}
 
 var cacheInstance *cache.Cache
 
-func getCache(rdb *redis.Client) *cache.Cache {
-	var logger = logging.GetNewLogger()
+// get cache initialization from memory, if no cache, initialize cache
+func getCache(rdb *redis.Client, logger *slog.Logger) *cache.Cache {
 	if cacheInstance == nil {
 		cacheInstanceLock.Lock()
 		defer cacheInstanceLock.Unlock()
@@ -40,7 +41,6 @@ func getCache(rdb *redis.Client) *cache.Cache {
 		}
 	} else {
 		logger.Info("Cache instance has already been created")
-
 	}
 	return cacheInstance
 }
@@ -49,15 +49,15 @@ func getCache(rdb *redis.Client) *cache.Cache {
 // accept redis client instead of cache and initialize the cache with the redis client in the RateLimiter
 // function signature - redisClient, algo - token_bucket, sliding_window_counter, sliding_window_log
 func RateLimiter(cfg RateLimiterConfig) func(http.Handler) http.Handler {
-	// get cache initialization from memory, if no cache, initialize cache
-	var cache = getCache(cfg.RedisClient)
-	var logger = logging.GetNewLogger()
+	var logger = logging.New()
+	var cache = getCache(cfg.RedisClient, logger)
+
 	return func(next http.Handler) http.Handler {
 		switch cfg.Strategy.Name {
 		case "sliding_window":
 			return handlers.SlidingWindowCounter(cache, logger, next)
 		case "token_bucket":
-			return handlers.SlidingWindowCounter(cache, logger, next)
+			return handlers.TokenBucket(cache, logger, next)
 		default:
 			return handlers.SlidingWindowCounter(cache, logger, next)
 		}

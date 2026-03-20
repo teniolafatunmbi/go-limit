@@ -7,9 +7,12 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
-	"teniolafatunmbi/go-limit/pkg/cache"
-	"teniolafatunmbi/go-limit/pkg/utils"
+	"teniolafatunmbi/go-limit/internal/cache"
+	"teniolafatunmbi/go-limit/internal/logging"
+	"teniolafatunmbi/go-limit/internal/utils"
 	"time"
+
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 type WindowKey string
@@ -101,30 +104,36 @@ func initializeCurrentAndPreviousWindows(
 ) error {
 	currentWindowValue, _ := json.Marshal(WindowValue{Key: currentWindowKey, Count: 0})
 	defaultWindowValue, _ := json.Marshal(WindowValue{})
+	logger := logging.FromContext(ctx)
 
 	err := cache.SetCurrentWindow(ctx, currentWindowValue)
 	if err != nil {
+		logger.ErrorContext(ctx, "Error occurred while setting current window value")
 		return err
 	}
 
 	err = cache.SetPreviousWindow(ctx, defaultWindowValue)
 
 	if err != nil {
+		logger.ErrorContext(ctx, "Error occurred while setting previous window value")
 		return err
 	}
+
 	return nil
 }
 
-func SlidingWindowCounter(cache *cache.Cache, logger *slog.Logger, next http.Handler) http.Handler {
+func SlidingWindowCounter(cache *cache.Cache, base *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestId := middleware.GetReqID(r.Context())
+		logger := base.With(slog.String("request_id", requestId))
+		ctx := logging.WithContext(r.Context(), logger)
+
 		ipAddress, err := utils.GetIpFromRemoteAddr(r.RemoteAddr)
 		if err != nil {
-			logger.Error("Malformed request: Can't get IP address")
+			logger.ErrorContext(ctx, "Malformed request: Can't get IP address")
 			http.Error(w, "Malformed request", http.StatusBadRequest)
 			return
 		}
-
-		ctx := context.Background()
 
 		now := time.Now()
 		currentWindow := fmt.Sprintf("%02d:%02d", now.Hour(), now.Minute())
@@ -134,11 +143,11 @@ func SlidingWindowCounter(cache *cache.Cache, logger *slog.Logger, next http.Han
 		prevWindowExists, _ := cache.DoesPreviousWindowExist(ctx)
 
 		if *currWindowExists == 0 && *prevWindowExists == 0 {
-			logger.Info("no curr and prev windows. Initializing new windows...")
+			logger.InfoContext(ctx, "no curr and prev windows. Initializing new windows...")
 			err = initializeCurrentAndPreviousWindows(ctx, cache, currentWindow)
 
 			if err != nil {
-				logger.Error("An error occurred: ", slog.String("error", err.Error()))
+				logger.ErrorContext(ctx, "An error occurred: "+err.Error())
 				http.Error(w, fmt.Sprintf("Internal server error: %s", err.Error()), http.StatusInternalServerError)
 				return
 			}
@@ -147,7 +156,7 @@ func SlidingWindowCounter(cache *cache.Cache, logger *slog.Logger, next http.Han
 		currentWindowInRedis, currWindowErr := cache.GetCurrentWindow(ctx)
 
 		if currWindowErr != nil {
-			logger.Error("An error occurred: ", slog.String("error", err.Error()))
+			logger.ErrorContext(ctx, "An error occurred: "+err.Error())
 			http.Error(w, fmt.Sprintf("Internal server error: %s", err.Error()), http.StatusInternalServerError)
 			return
 		}
@@ -156,7 +165,7 @@ func SlidingWindowCounter(cache *cache.Cache, logger *slog.Logger, next http.Han
 		err = json.Unmarshal([]byte(currentWindowInRedis), &currentWindowJsonInRedis)
 
 		if err != nil {
-			logger.Error("An error occurred: ", slog.String("error", err.Error()))
+			logger.Error("An error occurred: " + err.Error())
 			http.Error(w, fmt.Sprintf("Internal server error: %s", err.Error()), http.StatusInternalServerError)
 			return
 		}
@@ -166,18 +175,18 @@ func SlidingWindowCounter(cache *cache.Cache, logger *slog.Logger, next http.Han
 		// if currentWindow is not the windowMap.current.key,
 		// we're in a new window, so update the current and previous windows
 		if currentWindow != currentWindowJsonInRedis.Key {
-			logger.Info("current window doesn't match the current window key-value in store. Advancing window...")
+			logger.InfoContext(ctx, "current window doesn't match the current window key-value in store. Advancing window...")
 
 			err = advanceWindow(ctx, cache, currentWindow)
 
 			if err != nil {
+				logger.ErrorContext(ctx, fmt.Sprintf("Internal server error: %s", err.Error()))
 				http.Error(w, fmt.Sprintf("Internal server error: %s", err.Error()), http.StatusInternalServerError)
 				return
 			}
 		}
 
 		numberOfRequestsInCurrentWindow, err := calculateNumberOfRequestsInCurrentWindow(ctx, cache, now)
-
 		logger.Info("noOfRequestsInCurrentWindow.Sliding", slog.Any("no_of_requests_in_current_window", *numberOfRequestsInCurrentWindow))
 
 		// if noOfRequestsInCurrentWindow == threshold, discard request, else handle
@@ -199,7 +208,7 @@ func SlidingWindowCounter(cache *cache.Cache, logger *slog.Logger, next http.Han
 		err = cache.SetCurrentWindow(ctx, marshalledCurrWindow)
 
 		if err != nil {
-			logger.Error("Internal server error", err)
+			logger.ErrorContext(ctx, "Internal server error", err)
 			return
 		}
 
